@@ -8,9 +8,14 @@ Python slack bot for Incidents
   - New incident in Filesystem/DB/Opsgenie - done
     - Filesystem
 - slack channel creation and updates - next
-  - New Slack channel #incident-123)
-  - Notification in Status Channel (#current-incidents)
-  - Notification in Meta Channel (#incident-status)
+  - New Slack channel #incident-123) - done
+  - Notification in Status Channel (#current-incidents) - done, will get status every 30 minutes (automated?)
+  - Notification in Meta Channel (#incidents) - not done, will get open/resolve - every 24 hours status
+- To do
+  - Look up user and channel names
+  - Periodic Status post reminder or auto post
+  - Priorities
+  - Better Parsing
 
 At Shopify
 - status - is there an incident
