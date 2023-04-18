@@ -37,13 +37,20 @@ REQUPDATE = 20
 REQADDUPDATE = 21
 REQSETCURRENT = 22
 REQSTATUSALL = 23
+REQSETPRIORITY = 24 
+REQPRIORITY = 25 
+REQUPDATESTATUS = 26 
+REQUPDATEOVERALLSTATUS = 27 
 
 DATADIR = "data/"
 DATEFORMAT = "%Y-%m-%dZ%H:%M:%S"
 
+# periodic update channel
+CURRENTINCIDENTCHANNEL = "C053KBTDSVC"
+# open/resolve channel
 INCIDENTCHANNEL = "C053PV8E7E0"
 
-# current incident to work on by user
+# current incident to work on memorized by user backed by pickle for persistence
 current = {}
 
 # init
@@ -77,6 +84,14 @@ def inc_incident_number():
   incidentfile = open(DATADIR+'incidents.txt', 'w')
   incidentfile.write(str(current))
   incidentfile.close()
+
+
+def get_current(user):
+  if user in current:
+    id = current[user]
+  else:
+    id = current_incident_number()
+  return(id)
 
 
 def applog(msg,r):
@@ -122,15 +137,23 @@ def showlog(id,requester):
 
 
 def setattribute(a, id, v, r):
-  attributefile = open(DATADIR+"incident-"+str(id)+"/"+a+".txt", "w")
+  if "incident" in str(id):
+    attributefilename = DATADIR+str(id)+"/"+a+".txt"
+  else:
+    attributefilename = DATADIR+"incident-"+str(id)+"/"+a+".txt"
+  attributefile = open(attributefilename, "w")
   attributefile.write(v.strip())
   attributefile.close()
   applog("setAttribute " + a + " " + str(id) + " " + v, r)
 
 
 def attribute(a, id, r):
+  if "incident" in str(id):
+    attributefilename = DATADIR+str(id)+"/"+a+".txt"
+  else:
+    attributefilename = DATADIR+"incident-"+str(id)+"/"+a+".txt"
   try:
-    attributefile = open(DATADIR+"incident-"+str(id)+"/"+a+".txt", "r")
+    attributefile = open(attributefilename, "r")
     lines = attributefile.readlines()
     attributefile.close()
     statusline = ""
@@ -143,21 +166,23 @@ def attribute(a, id, r):
     return("")
 
 
-def record_incident(id, m, r):
+def record_incident(id, m, channel, r):
   incidentstring = "incident-" + str(id)
   os.mkdir(DATADIR+incidentstring)
-  setattribute("status", id, "open", user)
+  setattribute("status", id, "open", r)
   # build a title
   words = m.split()
   title = ""
   for titleword in words[2:]:
      title = title + " " + titleword
   title = title + " by " + r  
-  setattribute("title", id, title, user)
-  log(incidentid, r, "open")
-  log(incidentid, r, "title set to "+title)
-  applog(incidentid + " open", r)
-  applog(incidentid + " title set to " + title, r)
+  setattribute("title", id, title, r)
+  setattribute("priority", id, "P1", r)
+  setattribute("channel", id, channel, r)
+  log(incidentstring, r, "open")
+  log(incidentstring, r, "title set to "+title)
+  applog(incidentstring + " open", r)
+  applog(incidentstring + " title set to " + title, r)
 
 
 def resolve_incident(incidentid, r):
@@ -220,11 +245,14 @@ def create_channel(id, m, r):
     applog(result,r)
   except Exception as e:
     applog("Error creating conversation: {}".format(e), r)
-  
+  return(channelid)
+
+
+def post_notice(c, i, n, m, r):
   # add new incident into the generic channel
-  notice = "A new incident has been opened: #" + id + " regarding: " + m
+  notice = n + str(i) + " regarding: " + m
   try:
-    results = app.client.chat_postMessage(channel=INCIDENTCHANNEL, text=notice)
+    results = app.client.chat_postMessage(channel=c, text=notice)
     applog(result,r)
   except Exception as e:
     applog("Error creating conversation: {}".format(e), r)
@@ -238,6 +266,7 @@ def update_overall_status(incidentid, status, r):
   incidentfile.close()
   now = datetime.utcnow()
   nowstr = now.strftime(DATEFORMAT)
+  logline = ""
   newline = ""
   for line in lines:
     if incidentid in line:
@@ -273,6 +302,15 @@ def clean(requester):
     if "close" not in line:
       newline = newline + line
     else:
+      # archive channel
+      print(line) 
+      le = line.split()
+      print(le)
+      print(le[1])
+      id = le[1]
+      channel = attribute("channel", id, requester)
+      print(channel)
+      result = app.client.conversations_archive(channel=channel)
       logline = logline + line.strip()
   incidentfile = open(DATADIR+'status.txt', 'w')
   incidentfile.write(newline)
@@ -286,29 +324,41 @@ def create(m, requester):
   inc_incident_number()
   next = current_incident_number()
   id = str(next)
-  incidentstring = "incident-" + str(next)
-  create_channel(incidentstring, m, requester)
-  record_incident(id, m, requester)
+  incidentstring = "incident-" + id 
+  channelid = create_channel(incidentstring, m, requester)
+  post_notice(CURRENTINCIDENTCHANNEL, id, "Open Inicident Notice:", m, requester)
+  post_notice(INCIDENTCHANNEL, id, "Open Inicident Notice:", m, requester)
+  record_incident(id, m, channelid, requester)
   append_overall_status(incidentstring, "open", requester)
   return(incidentstring)
   
  
-def resolve(id, requester):
+def resolve(i, requester):
   # resolve an incidnet
-  incidentstring = "incident-"+str(id)
+  id = str(i)
+  incidentstring = "incident-" + id
+  title = attribute("title", id, requester)
   # channel
   resolve_incident(incidentstring, requestor)
   update_overall_status(incidentstring,"resolved",requester)
+  post_notice(CURRENTINCIDENTCHANNEL, id, "Resolved Inicident Notice:", title, requester)
+  post_notice(INCIDENTCHANNEL, id, "Resolved Inicident Notice:", title, requester)
   return(incidentstring)
   
  
-def close(id, requester):
+def close(i, requester):
   # close an incidnet
-  incidentstring = "incident-"+str(id)
+  id = str(i)
+  incidentstring = "incident-" + id
+  title = attribute("title", id, requester)
+  channel = attribute("channel", id, requester)
   # channel
   close_incident(incidentstring, requester)
   update_overall_status(incidentstring,"closed", requester)
-  return(incidentstring)
+  post_notice(channel, id, "Closed Inicident Notice:", title, requester)
+  post_notice(CURRENTINCIDENTCHANNEL, id, "Closed Inicident Notice:", title, requester)
+  post_notice(INCIDENTCHANNEL, id, "Closed Inicident Notice:", title, requester)
+  return(incidentstring + " closed")
   
  
 def get_quote():
@@ -328,13 +378,16 @@ def get_quote():
       return((quote[1:len(quote)-2]))
 
 
-def find_id(m):
+def find_id(m, r):
   args = m.split()
   print(len(args))
   print(m, args)
   rc = 0
   if len(args) > 2:
-    rc = int(args[2])
+    try:
+      rc = int(args[2])
+    except:
+      rc = get_current(r) 
   return(rc)
 
 
@@ -342,21 +395,30 @@ def find_value(m):
   args = m.split()
   print(m, args)
   rc = ""
-  for arg in args[3:]:
-    rc = rc + " " + arg
+  if len(args) > 2:
+    # if there is a inicdnet number then get the rest, else include from one filed earlier
+    try:
+      rc = int(args[2])
+      start = 3
+    except:
+      start = 2
+    for arg in args[start:]:
+      rc = rc + " " + arg
   return(rc)
 
 
-def parse_msg(msg):
+def parse_msg(msg, requester):
   m = msg.lower()
   rc = REQSTATUS
   id = 0
   v = ""
   if 'statusall' in m:
     rc = REQSTATUSALL
+  elif 'updatestatus' in m:
+    rc = REQUPDATESTATUS
   elif 'status' in m:
     rc = REQSTATUS
-    id = find_id(m)
+    id = find_id(m, requester)
   elif 'version' in m:
     rc = REQVERSION
   elif 'hello' in m:
@@ -370,73 +432,107 @@ def parse_msg(msg):
   elif 'resolve' in m:
     # needs an id
     rc = REQRESOLVE
-    id = find_id(m)
+    id = find_id(m, requester)
   elif 'showlog' in m:
     rc = REQSHOWLOG
-    id = find_id(m)
+    id = find_id(m, requester)
   elif 'log' in m:
     rc = REQLOG
-    id = find_id(m)
+    id = find_id(m, requester)
   elif 'clean' in m:
     rc = REQCLEAN
   elif 'close' in m:
     rc = REQCLOSE
-    id = find_id(m)
+    id = find_id(m, requester)
   elif 'setgeo' in m:
     rc = REQSETGEO
-    id = find_id(m)
+    id = find_id(m, requester)
     v = find_value(msg)
   elif 'getgeo' in m:
     rc = REQGEO
-    id = find_id(msg)
+    id = find_id(msg, requester)
   elif 'setsystem' in m:
     rc = REQSETSYSTEM
-    id = find_id(m)
+    id = find_id(m, requester)
     v = find_value(msg)
   elif 'getsystem' in m:
     rc = REQSYSTEM
-    id = find_id(msg)
+    id = find_id(msg, requester)
   elif 'setimpact' in m:
     rc = REQSETIMPACT
-    id = find_id(m)
+    id = find_id(m, requester)
     v = find_value(msg)
   elif 'getimpact' in m:
     rc = REQIMPACT
-    id = find_id(msg)
+    id = find_id(msg, requester)
   elif 'settitle' in m:
     rc = REQSETTITLE
-    id = find_id(m)
+    id = find_id(m, requester)
     v = find_value(msg)
   elif 'gettitle' in m:
     rc = REQTITLE
-    id = find_id(msg)
+    id = find_id(msg, requester)
   elif 'setupdate' in m:
     rc = REQSETUPDATE
-    id = find_id(m)
+    id = find_id(m, requester)
     v = find_value(msg)
   elif 'getupdate' in m:
     rc = REQUPDATE
-    id = find_id(msg)
+    id = find_id(msg, requester)
   elif 'addupdate' in m:
     rc = REQADDUPDATE
-    id = find_id(msg)
+    id = find_id(msg, requester)
     v = find_value(msg)
   elif 'setcurrent' in m:
     rc = REQSETCURRENT
-    id = find_id(msg)
+    id = find_id(msg, requester)
+  elif 'setpriority' in m:
+    rc = REQSETPRIORITY
+    id = find_id(msg, requester)
+    v = find_value(msg)
+  elif 'priority' in m:
+    rc = REQPRIORITY
+    id = find_id(msg, requester)
   return(rc, id, v)
 
 
-@app.message(re.compile("(hello|hi)", re.I))
-def say_hello_regex(say, context):
-  greeting = context["matches"][0]
-  say(f"{greeting}, <@{context['user_id']}>, how are you?")
+def update_status(r):
+  # overall status file update
+  incidentfile = open(DATADIR+'status.txt', 'r')
+  lines = incidentfile.readlines()
+  incidentfile.close()
+
+  now = datetime.utcnow()
+  nowstr = now.strftime(DATEFORMAT)
+  newline = ""
+
+  for line in lines:
+    if "open" in line:
+      newline = newline + line + "\n"
+
+  post_notice(CURRENTINCIDENTCHANNEL, id, "Open Inicident Notice:", newline,r)
+  logline = newline.replace("\n","")
+  applog("update_status" + logline, r)
 
 
-@app.message(re.compile(""))
-def catch_all(say, context):
-  """A catch-all message."""
-  say(f"I didn't get that, <@{context['user_id']}>.")
+def format_status_message(id, user):
+  msg = "incident-" + str(id) + "\n"
+  m = "title:" + attribute("title", id, user) + "\n"
+  msg = msg + m
+  m = "status:" + attribute("status", id, user) + "\n"
+  msg = msg + m
+  m = "priority:" + attribute("priority", id, user) + "\n"
+  msg = msg + m
+  m = "system:" + attribute("system", id, user) + "\n"
+  msg = msg + m
+  m = "geo:" + attribute("geo", id, user)
+  msg = msg + m + "\n"
+  m = "impact:" + attribute("impact", id, user)
+  msg = msg + m + "\n"
+  m = "channel:" + str(channel[id])
+  msg = msg + m + "\n"
+  msg = msg + "Priorities:\n  P1 = System down\n  P2 = System down for some customers or degraded signficantly\n  P3 = System degraded\n"
+  return(msg)
 
 
 @app.event("app_mention") 
@@ -444,7 +540,7 @@ def mention_handler(body, client, say):
   print(body)
   user = body['event']['user']
   inmsg = body['event']['text']
-  request, id, value = parse_msg(inmsg)
+  request, id, value = parse_msg(inmsg, user)
   applog( "mention" + inmsg, user)
   msg = "Sorry, please repeat"
   now = datetime.utcnow()
@@ -455,21 +551,8 @@ def mention_handler(body, client, say):
     msg = get_overall_status()
   elif request == REQSTATUS:
     # what is the current status
-    if user in current:
-      id = current[user]
-    else:
-      id = current_incident_number() 
-    msg = "incident-" + str(id) + "\n"
-    m = "title:" + attribute("title",id,user) + "\n"
-    msg = msg + m
-    m = "status:" + attribute("status",id,user) + "\n"
-    msg = msg + m
-    m = "system:" + attribute("system", id, user) + "\n"
-    msg = msg + m
-    m = "geo:" + attribute("geo", id, user)
-    msg = msg + m + "\n"
-    m = "impact:" + attribute("impact", id, user)
-    msg = msg + m + "\n"
+    id = get_current(user) 
+    msg = format_status_message(id, user)
   elif request == REQVERSION:
     msg = VERSION 
   elif request == REQHELLO:
@@ -520,10 +603,18 @@ def mention_handler(body, client, say):
     newm = m + "\n" + nowstr + " " + value
     setattribute("update", id, newm, user)
     msg = "Attribute update added"  
+  elif request == REQSETPRIORITY:
+    setattribute("priority", id, value, user)
+    msg = "Attribute priority set"  
+  elif request == REQPRIORITY:
+    msg = attribute("priority", id, user)
   elif request == REQSETCURRENT:
     current[user] = id
     save_current(current)
     msg = "Current ID set"  
+  elif request == REQUPDATESTATUS:
+    update_status(user)
+    msg = "All open inicdents updated"
   say(msg)
 
 
