@@ -4,13 +4,14 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 import os
 import re
 import random
+import pickle
 from datetime import datetime
 
 from keys import SLACK_APP_TOKEN, SLACK_BOT_TOKEN
 
 
 # constants
-VERSION = "0.1"
+VERSION = "0.2"
 
 REQHELP = 0
 REQVERSION = 1
@@ -23,18 +24,47 @@ REQLOG = 7
 REQSHOWLOG = 8 
 REQCLOSE = 9  
 REQCLEAN = 10  
+REQSETGEO = 11
+REQGEO = 12
+REQSETSYSTEM = 13
+REQSYSTEM = 14
+REQSETIMPACT = 15
+REQIMPACT = 16
+REQSETTITLE = 17
+REQTITLE = 18
+REQSETUPDATE = 19
+REQUPDATE = 20 
+REQADDUPDATE = 21
+REQSETCURRENT = 22
+REQSTATUSALL = 23
 
 DATADIR = "data/"
 DATEFORMAT = "%Y-%m-%dZ%H:%M:%S"
 
 INCIDENTCHANNEL = "C053PV8E7E0"
 
+# current incident to work on by user
+current = {}
 
 # init
 app = App(token=SLACK_BOT_TOKEN)
 
 
 # functions
+def load_current():
+  if os.path.exists("current.pickle"):
+    with open('current.pickle', 'rb') as handle:
+      rc = pickle.load(handle)
+  else:
+    rc = {}
+  return(rc)
+
+
+def save_current(c):
+  with open('current.pickle', 'wb') as handle:
+    pickle.dump(c, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
 def current_incident_number():
   incidentfile = open(DATADIR+'incidents.txt', 'r')
   incidents = incidentfile.readlines()
@@ -91,20 +121,39 @@ def showlog(id,requester):
   return(newline)
 
 
-def record_incident(incidentid, m, r):
-  os.mkdir(DATADIR+incidentid)
-  incidentfile = open(DATADIR+incidentid+'/status.txt', 'w')
-  incidentfile.write("open")
-  incidentfile.close()
-  incidentfile = open(DATADIR+incidentid+'/title.txt', 'w')
+def setattribute(a, id, v, r):
+  attributefile = open(DATADIR+"incident-"+str(id)+"/"+a+".txt", "w")
+  attributefile.write(v.strip())
+  attributefile.close()
+  applog("setAttribute " + a + " " + str(id) + " " + v, r)
+
+
+def attribute(a, id, r):
+  try:
+    attributefile = open(DATADIR+"incident-"+str(id)+"/"+a+".txt", "r")
+    lines = attributefile.readlines()
+    attributefile.close()
+    statusline = ""
+    for line in lines:
+      statusline = statusline + line
+    applog("Attribute " + a + " " + str(id) + " " + statusline, r)
+    return(statusline) 
+  except:
+    applog("Attribute not available", r)
+    return("")
+
+
+def record_incident(id, m, r):
+  incidentstring = "incident-" + str(id)
+  os.mkdir(DATADIR+incidentstring)
+  setattribute("status", id, "open", user)
   # build a title
   words = m.split()
   title = ""
   for titleword in words[2:]:
      title = title + " " + titleword
   title = title + " by " + r  
-  incidentfile.write(title)
-  incidentfile.close()
+  setattribute("title", id, title, user)
   log(incidentid, r, "open")
   log(incidentid, r, "title set to "+title)
   applog(incidentid + " open", r)
@@ -236,9 +285,10 @@ def create(m, requester):
   # get the last incident #
   inc_incident_number()
   next = current_incident_number()
+  id = str(next)
   incidentstring = "incident-" + str(next)
   create_channel(incidentstring, m, requester)
-  record_incident(incidentstring, m, requester)
+  record_incident(id, m, requester)
   append_overall_status(incidentstring, "open", requester)
   return(incidentstring)
   
@@ -280,17 +330,33 @@ def get_quote():
 
 def find_id(m):
   args = m.split()
+  print(len(args))
   print(m, args)
-  rc = int(args[2])
+  rc = 0
+  if len(args) > 2:
+    rc = int(args[2])
   return(rc)
 
 
-def parse_msg(m):
-  m = m.lower()
+def find_value(m):
+  args = m.split()
+  print(m, args)
+  rc = ""
+  for arg in args[3:]:
+    rc = rc + " " + arg
+  return(rc)
+
+
+def parse_msg(msg):
+  m = msg.lower()
   rc = REQSTATUS
   id = 0
-  if 'status' in m:
+  v = ""
+  if 'statusall' in m:
+    rc = REQSTATUSALL
+  elif 'status' in m:
     rc = REQSTATUS
+    id = find_id(m)
   elif 'version' in m:
     rc = REQVERSION
   elif 'hello' in m:
@@ -316,19 +382,61 @@ def parse_msg(m):
   elif 'close' in m:
     rc = REQCLOSE
     id = find_id(m)
-  return(rc, id)
+  elif 'setgeo' in m:
+    rc = REQSETGEO
+    id = find_id(m)
+    v = find_value(msg)
+  elif 'getgeo' in m:
+    rc = REQGEO
+    id = find_id(msg)
+  elif 'setsystem' in m:
+    rc = REQSETSYSTEM
+    id = find_id(m)
+    v = find_value(msg)
+  elif 'getsystem' in m:
+    rc = REQSYSTEM
+    id = find_id(msg)
+  elif 'setimpact' in m:
+    rc = REQSETIMPACT
+    id = find_id(m)
+    v = find_value(msg)
+  elif 'getimpact' in m:
+    rc = REQIMPACT
+    id = find_id(msg)
+  elif 'settitle' in m:
+    rc = REQSETTITLE
+    id = find_id(m)
+    v = find_value(msg)
+  elif 'gettitle' in m:
+    rc = REQTITLE
+    id = find_id(msg)
+  elif 'setupdate' in m:
+    rc = REQSETUPDATE
+    id = find_id(m)
+    v = find_value(msg)
+  elif 'getupdate' in m:
+    rc = REQUPDATE
+    id = find_id(msg)
+  elif 'addupdate' in m:
+    rc = REQADDUPDATE
+    id = find_id(msg)
+    v = find_value(msg)
+  elif 'setcurrent' in m:
+    rc = REQSETCURRENT
+    id = find_id(msg)
+  return(rc, id, v)
 
 
 @app.message(re.compile("(hello|hi)", re.I))
 def say_hello_regex(say, context):
-    greeting = context["matches"][0]
-    say(f"{greeting}, <@{context['user_id']}>, how are you?")
+  greeting = context["matches"][0]
+  say(f"{greeting}, <@{context['user_id']}>, how are you?")
 
 
 @app.message(re.compile(""))
 def catch_all(say, context):
-    """A catch-all message."""
-    say(f"I didn't get that, <@{context['user_id']}>.")
+  """A catch-all message."""
+  say(f"I didn't get that, <@{context['user_id']}>.")
 
 
 @app.event("app_mention") 
@@ -336,13 +444,32 @@ def mention_handler(body, client, say):
   print(body)
   user = body['event']['user']
   inmsg = body['event']['text']
-  request, id = parse_msg(inmsg)
+  request, id, value = parse_msg(inmsg)
   applog( "mention" + inmsg, user)
   msg = "Sorry, please repeat"
+  now = datetime.utcnow()
+  nowstr = now.strftime(DATEFORMAT)
   if request == REQHELP:
     msg = "I can react to help, hello, quote, and status"
-  elif request == REQSTATUS:
+  elif request == REQSTATUSALL:
     msg = get_overall_status()
+  elif request == REQSTATUS:
+    # what is the current status
+    if user in current:
+      id = current[user]
+    else:
+      id = current_incident_number() 
+    msg = "incident-" + str(id) + "\n"
+    m = "title:" + attribute("title",id,user) + "\n"
+    msg = msg + m
+    m = "status:" + attribute("status",id,user) + "\n"
+    msg = msg + m
+    m = "system:" + attribute("system", id, user) + "\n"
+    msg = msg + m
+    m = "geo:" + attribute("geo", id, user)
+    msg = msg + m + "\n"
+    m = "impact:" + attribute("impact", id, user)
+    msg = msg + m + "\n"
   elif request == REQVERSION:
     msg = VERSION 
   elif request == REQHELLO:
@@ -363,6 +490,41 @@ def mention_handler(body, client, say):
   elif request == REQCLEAN:
     clean(user)
     msg = "Log cleaned"  
+  elif request == REQSETSYSTEM:
+    setattribute("system", id, value, user)
+    msg = "Attibute system set"  
+  elif request == REQSYSTEM:
+    msg = "system:" + attribute("system", id, user)
+  elif request == REQSETGEO:
+    setattribute("geo", id, value, user)
+    msg = "Attibute geo set"  
+  elif request == REQGEO:
+    msg = "geo:" + attribute("geo", id, user)
+  elif request == REQSETIMPACT:
+    setattribute("impact", id, value, user)
+    msg = "Attibute impact set"  
+  elif request == REQIMPACT:
+    msg = "impact:" + attribute("impact", id, user)
+  elif request == REQSETTITLE:
+    setattribute("title", id, value, user)
+    msg = "Attibute title set"  
+  elif request == REQTITLE:
+    msg = "title:" + attribute("title", id, user)
+  elif request == REQSETUPDATE:
+    setattribute("update", id, value, user)
+    msg = "Attribute update set"  
+  elif request == REQUPDATE:
+    msg = "update:" + nowstr + " " + attribute("update", id, user)
+  elif request == REQADDUPDATE:
+    m = attribute("update", id, user)
+    newm = m + "\n" + nowstr + " " + value
+    setattribute("update", id, newm, user)
+    msg = "Attribute update added"  
+  elif request == REQSETCURRENT:
+    current[user] = id
+    save_current(current)
+    msg = "Current ID set"  
+  say(msg)
 
 
 @app.event("app_wave") 
@@ -371,5 +533,6 @@ def mention_handler(body, say):
 
 
 if __name__ == "__main__":
+  current = load_current()
   handler = SocketModeHandler(app, SLACK_APP_TOKEN)
   handler.start()
