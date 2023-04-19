@@ -11,7 +11,7 @@ from keys import SLACK_APP_TOKEN, SLACK_BOT_TOKEN
 
 
 # constants
-VERSION = "0.2"
+VERSION = "0.3"
 
 REQHELP = 0
 REQVERSION = 1
@@ -41,6 +41,12 @@ REQSETPRIORITY = 24
 REQPRIORITY = 25 
 REQUPDATESTATUS = 26 
 REQUPDATEOVERALLSTATUS = 27 
+REQSETOWNER = 28 
+REQOWNER = 29 
+REQSETPOSTMORTEM = 30 
+REQPOSTMORTEM = 31 
+REQSETRCA = 32 
+REQRCA = 33 
 
 DATADIR = "data/"
 DATEFORMAT = "%Y-%m-%dZ%H:%M:%S"
@@ -176,9 +182,13 @@ def record_incident(id, m, channel, r):
   for titleword in words[2:]:
      title = title + " " + titleword
   title = title + " by " + r  
+  result = app.client.users_info(user=r)
+  username = result["user"]["name"]
   setattribute("title", id, title, r)
   setattribute("priority", id, "P1", r)
   setattribute("channel", id, channel, r)
+  setattribute("owner", id, r, r)
+  setattribute("username", id, username, r)
   log(incidentstring, r, "open")
   log(incidentstring, r, "title set to "+title)
   applog(incidentstring + " open", r)
@@ -326,10 +336,12 @@ def create(m, requester):
   id = str(next)
   incidentstring = "incident-" + id 
   channelid = create_channel(incidentstring, m, requester)
-  post_notice(CURRENTINCIDENTCHANNEL, id, "Open Inicident Notice:", m, requester)
-  post_notice(INCIDENTCHANNEL, id, "Open Inicident Notice:", m, requester)
+  post_notice(CURRENTINCIDENTCHANNEL, incidentstring, "Open Inicident Notice: ", m, requester)
+  post_notice(INCIDENTCHANNEL, incidentstring, "Open Inicident Notice: ", m, requester)
   record_incident(id, m, channelid, requester)
   append_overall_status(incidentstring, "open", requester)
+  # make id current for requester
+  current[requester] = id
   return(incidentstring)
   
  
@@ -341,8 +353,8 @@ def resolve(i, requester):
   # channel
   resolve_incident(incidentstring, requestor)
   update_overall_status(incidentstring,"resolved",requester)
-  post_notice(CURRENTINCIDENTCHANNEL, id, "Resolved Inicident Notice:", title, requester)
-  post_notice(INCIDENTCHANNEL, id, "Resolved Inicident Notice:", title, requester)
+  post_notice(CURRENTINCIDENTCHANNEL, incidentstring, "Resolved Inicident Notice: ", title, requester)
+  post_notice(INCIDENTCHANNEL, incidentstring, "Resolved Inicident Notice: ", title, requester)
   return(incidentstring)
   
  
@@ -355,9 +367,9 @@ def close(i, requester):
   # channel
   close_incident(incidentstring, requester)
   update_overall_status(incidentstring,"closed", requester)
-  post_notice(channel, id, "Closed Inicident Notice:", title, requester)
-  post_notice(CURRENTINCIDENTCHANNEL, id, "Closed Inicident Notice:", title, requester)
-  post_notice(INCIDENTCHANNEL, id, "Closed Inicident Notice:", title, requester)
+  post_notice(channel, incidentstring, "Closed Inicident Notice: ", title, requester)
+  post_notice(CURRENTINCIDENTCHANNEL, incidentstring, "Closed Inicident Notice: ", title, requester)
+  post_notice(INCIDENTCHANNEL, incidentstring, "Closed Inicident Notice: ", title, requester)
   return(incidentstring + " closed")
   
  
@@ -375,7 +387,7 @@ def get_quote():
         lineselected = lineselected + 1
         line = lines[lineselected]
         quote = quote + line
-      return((quote[1:len(quote)-2]))
+      return(quote[1:len(quote)-2] + " - Bruce Lee")
 
 
 def find_id(m, r):
@@ -396,14 +408,16 @@ def find_value(m):
   print(m, args)
   rc = ""
   if len(args) > 2:
-    # if there is a inicdnet number then get the rest, else include from one filed earlier
+    # if there is a incidnet number then get the rest, else include from one filed earlier
     try:
       rc = int(args[2])
       start = 3
     except:
       start = 2
+    rc = ""
     for arg in args[start:]:
-      rc = rc + " " + arg
+      rc = rc + " " + str(arg)
+    rc = rc.strip()
   return(rc)
 
 
@@ -493,10 +507,31 @@ def parse_msg(msg, requester):
   elif 'priority' in m:
     rc = REQPRIORITY
     id = find_id(msg, requester)
+  elif 'setowner' in m:
+    rc = REQSETOWNER
+    id = find_id(msg, requester)
+    v = find_value(msg)
+  elif 'owner' in m:
+    rc = REQOWNER
+    id = find_id(msg, requester)
+  elif 'setpostmortem' in m:
+    rc = REQSETPOSTMORTEM
+    id = find_id(msg, requester)
+    v = find_value(msg)
+  elif 'postmortem' in m:
+    rc = REQPOSTMORTEM
+    id = find_id(msg, requester)
+  elif 'setrca' in m:
+    rc = REQSETRCA
+    id = find_id(msg, requester)
+    v = find_value(msg)
+  elif 'rca' in m:
+    rc = REQRCA
+    id = find_id(msg, requester)
   return(rc, id, v)
 
 
-def update_status(r):
+def update_open_status(r):
   # overall status file update
   incidentfile = open(DATADIR+'status.txt', 'r')
   lines = incidentfile.readlines()
@@ -508,11 +543,14 @@ def update_status(r):
 
   for line in lines:
     if "open" in line:
-      newline = newline + line + "\n"
-
-  post_notice(CURRENTINCIDENTCHANNEL, id, "Open Inicident Notice:", newline,r)
+      le = line.split()
+      id = le[1]
+      title = attribute("title", id, r)
+      post_notice(CURRENTINCIDENTCHANNEL, id, "Open Incident: ", title, r)
+      newline = newline + line
+  
   logline = newline.replace("\n","")
-  applog("update_status" + logline, r)
+  applog("update_open_status" + logline, r)
 
 
 def format_status_message(id, user):
@@ -529,9 +567,17 @@ def format_status_message(id, user):
   msg = msg + m + "\n"
   m = "impact:" + attribute("impact", id, user)
   msg = msg + m + "\n"
-  m = "channel:" + str(channel[id])
+  m = "owner:" + attribute("owner", id, user)
   msg = msg + m + "\n"
-  msg = msg + "Priorities:\n  P1 = System down\n  P2 = System down for some customers or degraded signficantly\n  P3 = System degraded\n"
+  m = "username:" + attribute("username", id, user)
+  msg = msg + m + "\n"
+  m = "postmortem:" + attribute("postmortem", id, user)
+  msg = msg + m + "\n"
+  m = "rca:" + attribute("rca", id, user)
+  msg = msg + m + "\n"
+  m = "update:" + attribute("update", id, user)
+  msg = msg + m + "\n"
+  msg = msg + "Priority Guide:\n  P1 = System down\n  P2 = System down for some customers or degraded signficantly\n  P3 = System degraded\n"
   return(msg)
 
 
@@ -561,6 +607,7 @@ def mention_handler(body, client, say):
     msg = get_quote()
   elif request == REQCREATE:
     msg = create(inmsg, user)
+    msg = msg + " created"
   elif request == REQRESOLVE:
     msg = resolve(id, user)
   elif request == REQCLOSE:
@@ -608,13 +655,31 @@ def mention_handler(body, client, say):
     msg = "Attribute priority set"  
   elif request == REQPRIORITY:
     msg = attribute("priority", id, user)
+  elif request == REQSETPOSTMORTEM:
+    setattribute("priority", id, value, user)
+    msg = "Attribute postmortem set"  
+  elif request == REQPOSTMORTEM:
+    msg = attribute("postmortem", id, user)
+  elif request == REQSETRCA:
+    setattribute("rca", id, value, user)
+    msg = "Attribute RCA set"  
+  elif request == REQRCA:
+    msg = attribute("rca", id, user)
+  elif request == REQSETOWNER:
+    setattribute("owner", id, value, user)
+    result = app.client.users_info(user=value)
+    username = result["user"]["name"]
+    setattribute("username", id, username, user)
+    msg = "Owner/Username set"  
+  elif request == REQOWNER:
+    msg = attribute("owner", id, user)
   elif request == REQSETCURRENT:
     current[user] = id
     save_current(current)
     msg = "Current ID set"  
   elif request == REQUPDATESTATUS:
-    update_status(user)
-    msg = "All open inicdents updated"
+    update_open_status(user)
+    msg = "All open incidents updated"
   say(msg)
 
 
